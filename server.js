@@ -12,7 +12,7 @@ app.post("/send-report", async (req, res) => {
 
   try {
     const slackResponse = await fetch(
-      "https://hooks.slack.com/services/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",
+      "https://hooks.slack.com/services/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",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
