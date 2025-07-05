@@ -5,6 +5,9 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.get("/", (req, res) => {
+  res.send("Slack proxy działa poprawnie 🚀");
+});
 
 app.post("/send-report", async (req, res) => {
   const { text } = req.body;
