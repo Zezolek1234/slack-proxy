@@ -5,27 +5,6 @@ const fetch = require('node-fetch'); // używamy fetch do wysyłki na Slacka
 
 const app = express();
 
-// Pobierz token ze zmiennych środowiskowych
-const SECRET_TOKEN = process.env.API_TOKEN;
-
-// Middleware do weryfikacji tokenu
-const verifyToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-
-  if (!authHeader) {
-    return res.status(403).send('Brak tokenu autoryzacyjnego.');
-  }
-
-  // Oczekujemy formatu "Bearer <token>"
-  const token = authHeader.split(' ')[1];
-
-  if (token !== SECRET_TOKEN) {
-    return res.status(401).send('Nieprawidłowy token.');
-  }
-
-  next(); // Jeśli token jest poprawny, przejdź dalej
-};
-
 // Middleware
 app.use(cors());
 app.use(express.json());
