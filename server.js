@@ -2,63 +2,64 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const fs = require('fs'); // Do obsługi plików
+const Redis = require('ioredis');
 
 const app = express();
 
-// Middleware
+// ### Middleware ###
 app.use(cors());
 app.use(express.json());
 
 // ### Konfiguracja ###
 const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+const redisUrl = process.env.REDIS_URL; // Adres URL do Redis z Render
 const COOLDOWN_PERIOD_MS = 12 * 60 * 60 * 1000; // 12 godzin
-const COOLDOWN_FILE_PATH = './cooldown_timestamp.txt'; // Plik do zapisu czasu
+const COOLDOWN_KEY = 'slack_last_send_timestamp'; // Klucz w bazie Redis
 
-// ### Punkt 1: Utrwalenie stanu cooldownu ###
-
-// Funkcja do odczytu ostatniego czasu z pliku
-function readLastTimestamp() {
-  try {
-    // Sprawdź, czy plik istnieje
-    if (fs.existsSync(COOLDOWN_FILE_PATH)) {
-      const timestampStr = fs.readFileSync(COOLDOWN_FILE_PATH, 'utf-8');
-      // Zwróć czas jako liczbę
-      return parseInt(timestampStr, 10);
-    }
-  } catch (error) {
-    console.error('Błąd odczytu pliku cooldown:', error);
-  }
-  // Zwróć null, jeśli plik nie istnieje lub wystąpił błąd
-  return null;
+// Sprawdzenie, czy kluczowe zmienne środowiskowe są ustawione
+if (!redisUrl) {
+  console.error('Brak zdefiniowanego REDIS_URL! Aplikacja nie może poprawnie działać.');
+  process.exit(1); // Zakończ proces, jeśli nie ma połączenia z Redis
 }
 
-// Odczytaj czas przy starcie serwera
-let lastSuccessfulSendTimestamp = readLastTimestamp();
-console.log('Odczytano ostatni czas wysyłki:', lastSuccessfulSendTimestamp ? new Date(lastSuccessfulSendTimestamp).toISOString() : 'Brak');
+// Inicjalizacja klienta Redis
+const redis = new Redis(redisUrl);
 
+redis.on('connect', () => {
+  console.log('✅ Pomyślnie połączono z Redis.');
+});
+redis.on('error', (err) => {
+  console.error('Błąd połączenia z Redis:', err);
+});
 
-// ### Punkt 2: Wydzielenie logiki do "middleware" ###
+// ### Middleware do sprawdzania cooldownu ###
+const checkCooldown = async (req, res, next) => {
+  try {
+    const lastSuccessfulSendTimestamp = await redis.get(COOLDOWN_KEY);
 
-const checkCooldown = (req, res, next) => {
-  if (lastSuccessfulSendTimestamp) {
-    const now = Date.now();
-    const timeSinceLastSend = now - lastSuccessfulSendTimestamp;
+    if (lastSuccessfulSendTimestamp) {
+      const now = Date.now();
+      const timeSinceLastSend = now - parseInt(lastSuccessfulSendTimestamp, 10);
 
-    if (timeSinceLastSend < COOLDOWN_PERIOD_MS) {
-      const timeLeft = COOLDOWN_PERIOD_MS - timeSinceLastSend;
-      const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
-      const minutesLeft = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
-      
-      console.warn('Żądanie zablokowane przez cooldown.');
-      return res.status(429).json({
-        error: 'Cooldown active',
-        message: `Możesz wysłać kolejny raport za około ${hoursLeft} godzin i ${minutesLeft} minut.`
-      });
+      if (timeSinceLastSend < COOLDOWN_PERIOD_MS) {
+        const timeLeft = COOLDOWN_PERIOD_MS - timeSinceLastSend;
+        const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
+        const minutesLeft = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+        
+        console.warn('Żądanie zablokowane przez cooldown.');
+        return res.status(429).json({
+          error: 'Cooldown active',
+          message: `Możesz wysłać kolejny raport za około ${hoursLeft} godzin i ${minutesLeft} minut.`
+        });
+      }
     }
+    // Jeśli cooldown nie jest aktywny, pozwól na dalsze przetwarzanie
+    next();
+  } catch (error) {
+    console.error("Błąd podczas sprawdzania cooldownu w Redis:", error);
+    // W przypadku błędu Redis, przepuszczamy żądanie, aby nie blokować aplikacji
+    next();
   }
-  // Jeśli cooldown nie jest aktywny, pozwól na dalsze przetwarzanie żądania
-  next(); 
 };
 
 // ### Definicje Endpointów ###
@@ -89,21 +90,16 @@ app.post('/send-report', checkCooldown, async (req, res) => {
       body: JSON.stringify({ text })
     });
 
-    // Sprawdź, czy się udało
+    // Sprawdź, czy wysyłka się udała
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Błąd Slack:", errorText);
       return res.status(500).json({ error: 'Slack error', details: errorText });
     }
 
-    // Zaktualizuj i zapisz czas udanej wysyłki
-    lastSuccessfulSendTimestamp = Date.now();
-    try {
-      fs.writeFileSync(COOLDOWN_FILE_PATH, lastSuccessfulSendTimestamp.toString());
-      console.log('Pomyślnie zapisano nowy czas cooldownu do pliku.');
-    } catch (error) {
-      console.error('Błąd zapisu pliku cooldown:', error);
-    }
+    // Zaktualizuj czas udanej wysyłki w Redis
+    await redis.set(COOLDOWN_KEY, Date.now());
+    console.log('Pomyślnie zapisano nowy czas cooldownu w Redis.');
 
     res.json({ message: '✅ Raport wysłany na Slacka' });
   } catch (error) {
