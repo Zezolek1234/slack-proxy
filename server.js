@@ -108,6 +108,30 @@ app.post('/send-report', checkCooldown, async (req, res) => {
   }
 });
 
+// ### Sekretny Endpoint do resetowania cooldownu ###
+// Użyj trudnej do odgadnięcia ścieżki i sekretu, aby zabezpieczyć endpoint
+app.post('/reset-cooldown-a1b2c3d4e5f6', async (req, res) => {
+  try {
+    // Sprawdzenie hasła w zapytaniu dla dodatkowego bezpieczeństwa
+    const secret = req.query.secret;
+    if (!process.env.RESET_SECRET || secret !== process.env.RESET_SECRET) {
+      return res.status(403).json({ error: 'Brak autoryzacji' });
+    }
+    
+    const result = await redis.del(COOLDOWN_KEY);
+    if (result > 0) {
+      console.log('Ręcznie zresetowano cooldown.');
+      res.status(200).json({ message: '✅ Cooldown został zresetowany.' });
+    } else {
+      console.log('Próbowano zresetować cooldown, ale licznik nie był aktywny.');
+      res.status(200).json({ message: 'Licznik cooldownu nie był aktywny.' });
+    }
+  } catch (error) {
+    console.error("Błąd podczas ręcznego resetowania cooldownu:", error);
+    res.status(500).json({ error: 'Błąd serwera podczas resetowania.' });
+  }
+});
+
 // ### Start serwera ###
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
